@@ -6,3 +6,4 @@ objsnf_snapshots
 Dockerfile
 libtracer_test.so
 REPORT.md
+discovered*.json
