@@ -86,57 +86,10 @@ int main() {
 
 ### Test Build
 
-We first need to build the wrapper by:
+Run the test script by:
 ```bash
 $ make #LD_PRELOAD wrapper to aid in tracing
 $ make run_example #Build and run the example
 $ ./decode3.py objsnf_snapshots
 $ # Look at the json file discovered_objects_xxx.json
-```
-
-After running the example, a directory by the naem of `objsnf_snapshots` will be created in the current working directory. The directory will contain the snapshots of the traced variables.
-
-The filename format for each snapshot (binary file) is as follows:
-```
-obj@<object's_runtime_addr>
-[size:<object's_size>] 
-[name:<object's_name>] \\ Object name given while registering the object
-[snap:<snapshot_number>] \\ Snapshot number (the number wont we consecutive but will be in order of the modification)
-
-```
-
-You can decode the files using python's `struct` module. The following code can be used to decode the files:
-```python
-import os
-import struct   # For unpacking binary data
-import glob
-
-# Say your struct object is of type
-# struct objsnf_object {
-#     char name[32];
-#     int size;
-#     int snap;
-#     void *addr;
-# };
-
-# Define the struct format
-struct_format = '32siiP'  # 32 bytes for name, 2 ints for size and snap, and a pointer for addr
-
-# Get the list of all files in the directory
-files = glob.glob('objsnf_snapshots/*')
-
-# Loop through each file
-for file in files:
-    with open(file, 'rb') as f:
-        # Read the binary data
-        data = f.read(struct.calcsize(struct_format))
-        
-        # Unpack the data
-        name, size, snap, addr = struct.unpack(struct_format, data)
-        
-        # Decode the name from bytes to string
-        name = name.decode('utf-8').rstrip('\x00')  # Remove null characters
-        
-        # Print the unpacked data
-        print(f"Name: {name}, Size: {size}, Snap: {snap}, Addr: {addr}")
 ```
