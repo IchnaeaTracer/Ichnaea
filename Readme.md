@@ -140,8 +140,3 @@ for file in files:
         # Print the unpacked data
         print(f"Name: {name}, Size: {size}, Snap: {snap}, Addr: {addr}")
 ```
-
-## TODOs
-1. Measure performance impact
-2. Optimize for speed
-3. Verify/Double Check thread safety
