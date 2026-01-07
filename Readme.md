@@ -93,4 +93,5 @@ $ make run_example #Build and run the example
 $ ./decode3.py objsnf_snapshots
 $ # Look at the json file discovered_objects_xxx.json
 
+
 ```
