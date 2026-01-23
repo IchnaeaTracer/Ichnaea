@@ -70,7 +70,7 @@ int main() {
 
     printf("\nHeap buffer after 1st modifications: %s\n", heap_buffer);
 
-    // Modifying the heap object
+    // Modifying the heap object 
     // (2nd modification, no visible affect on string but will still be logged )
     printf("Modifying heap object again...\n");
 
