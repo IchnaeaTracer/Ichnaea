@@ -6,7 +6,7 @@
 
 
 ICHNAEA_ISOLATE_GLOBAL int global_var = 0;
-char * heap_buffer;
+char * heap_buffer; 
 
 int main() {
 
