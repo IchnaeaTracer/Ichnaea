@@ -1,15 +1,15 @@
 /*
-    * Ichnaea
+    * Object Sniffer
     * A C/C++ object tracing and debugging tool
     * Include this header in your C/C++ code to use the tracer
     * After including this header, you can use the following function:
-    * int ichnaea_register_object(void *addr, size_t size, char *name, char *type);
+    * int objsnf_register_object(void *addr, size_t size, char *name, char *type);
     * This function will register the object at the given address with the given size, name and type
     * It will trace the object and log its access
 */
 
+
 // Flags to enable/disable features
-#define PAGE_SIZE 4096LU
 
 /* Batching Flags
     * If you're not sure if the program you're tracing will exit gracefully,
@@ -19,31 +19,46 @@
     * NOTE: Batching won't work with SIGKILL
 */
 #define OBJSNF_ENABLE_SNAPSHOT_BATCHING     1       // Enable snapshot batching for performance
-#define OBJSNF_ENABLE_SMART_ALLOCS          1       // Enable smart allocs to reduce the number of mprotect calls
-
 #ifndef OBJSNF_MAX_SNAPSHOTS_PER_OBJECT
-#define OBJSNF_MAX_SNAPSHOTS_PER_OBJECT     600      // Max number of snapshots to store in memory per object (overflow causes error)
+#define OBJSNF_MAX_SNAPSHOTS_PER_OBJECT     200      // Max number of snapshots to store in memory per object (overflow causes error)
+#endif
+// End of Batching Flags
+
+#define OBJSNF_TRACE_ALL_ALLOCS             0       // [WIP] Trace all allocations (malloc, calloc, realloc, free, posix_memalign, aligned_alloc)
+#define OBJSNF_ENABLE_SMART_ALLOCS          1       // Enable smart allocs to reduce the number of mprotect calls
+#define ICHNAEA_ISOLATE_ALL_ALLOCS          1       // All heap memory allocations are on their isolated pages
+
+#ifndef ICHNAEA_TRACE_READS
+#define ICHNAEA_TRACE_READS                 1       // [WIP] Enable tracing of read accesses(Tested for isolated heap objects) (Please turn on ICHNAEA_ISOLATE_ALL_ALLOCS)
+// TODO: Add a flag compatibility check at library compile time
 #endif
 
-#define PRINT_STATE_INFO                    0
-#define ENABLE_WARNINGS                     0       // Enable warnings for debugging
-// End of Batching Flags
+
+#if ICHNAEA_TRACE_READS
+#define ICHNAEA_ISOLATE_ALL_ALLOCS        1       // If tracing reads is enabled, then heap isolation must be enabled
+#endif
+
+// Enable pkey based locking (much faster) (Requires Linux kernel 4.9+ and CPU support)
+// A value of 0 will use mprotect based locking (wayy slower)
+#ifndef OBJSNF_ENABLE_PKEY_BASED_LOCK
+#define OBJSNF_ENABLE_PKEY_BASED_LOCK       1
+#endif
+
+
+#define ENABLE_LOGGING                          1            // Enable logging of object accesses to disk
+#define PRINT_STATE_INFO                        0            // Enable printing of state information
+#define ALLOC_DBG                               0           // Enable allocation debugging prints
+#define ENABLE_WARNINGS                         0            // Enable warnings for debugging
+
 #define MAX_OBJ_COUNT                           100          // Max number of objects that can be traced/registered
 #define MAX_INTERRUPT_CONTEXTS                  64           // Max number of interrupt contexts (threads at once)
-#define MAX_CALL_STACK_DEPTH_FOR_SNAPSHOT       10           // Max call stack depth for snapshots
-#define MAX_METADATA_BUFFER_SIZE                10 * 1024    // The max file size for the metadata json file (Bytes)
-#define DISABLE_CRITICAL_LOGGING                1            // Disable even the most critical prints statements (e.g. errors, warnings, etc.)
+#define MAX_CALL_STACK_DEPTH_FOR_SNAPSHOT       20           // Max call stack depth for snapshots
+#define MAX_METADATA_BUFFER_SIZE                600 * 1024   // The max file size for the metadata json file (KiBs)
+#define DISABLE_CRITICAL_LOGGING                0            // Disable even the most critical prints statements (e.g. errors, warnings, etc.)
+// #define OBJSNF_MAX_CALL_STACK_DEPTH          20           // Max call stack depth to store for each snapshot
+#define PAGE_SIZE 4096LU
 
-// This attribute is used to isolate global variables in their own section (Will generate a warning)
-#define ICHNAEA_ISOLATE_GLOBAL __attribute__((section (".rodata")))
-
-// Mark a pointer as used so stores aren't optimized away
-#define ICHNAEA_MARK_PTR(x) asm volatile ("" : "=m"(x));
-
-// Mark alloc check, checks if the allocation is for a traced object, if not then falls back to actual allocator 
-// but if it is the returns freshly allocated memory
-
-#ifndef _OBJSNF_SRC // These definitions are exclusivly for the user
+#ifndef _OBJSNF_SRC // These definitions are exclusivly for the user invoking the tracer
 
 // Some hacks to install definitions for stuff like size_t
 /*  If we get here, none of the usual guards fired, so roll our own.
@@ -67,8 +82,11 @@ typedef unsigned long size_t;
 
 #ifdef __cplusplus
 extern "C" __attribute__((weak)) int objsnf_register_object(void *addr, size_t size , char *name , char *type);
+extern "C" __attribute__((weak)) int ichnaea_register_object(void *addr, size_t size , char *name , char *type);
+
 #else
 __attribute__((weak)) extern int objsnf_register_object(void *addr, size_t size , char *name , char *type);
+__attribute__((weak)) extern int ichnaea_register_object(void *addr, size_t size , char *name , char *type);    
 #endif
 
 
@@ -88,6 +106,10 @@ __attribute__((weak)) extern int objsnf_register_object(void *addr, size_t size 
 // This is important for mprotect to work correctly for globals and stack variables
 
 #define OBJSNF_PG_ALIGN __attribute__((aligned (PAGE_SIZE)))
+#define ICHNAEA_PG_ALIGN OBJSNF_PG_ALIGN
+
+#define OBJSNF_ISOLATE_GLOBAL __attribute__((section(".rodata")))
+#define ICHNAEA_ISOLATE_GLOBAL OBJSNF_PG_ALIGN
 
 #define RESPECT_ORDER __attribute__((no_reorder))
 
@@ -116,6 +138,8 @@ __attribute__((weak)) extern int objsnf_register_object(void *addr, size_t size 
 #include <sys/stat.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <ucontext.h>
+#include <string.h>
 
 
 // Libc wrapper cannot have these included
@@ -124,13 +148,13 @@ __attribute__((weak)) extern int objsnf_register_object(void *addr, size_t size 
 
 #include <stdlib.h>
 #include <signal.h>
-#include <ucontext.h>
-#include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <execinfo.h>
+#pragma GCC diagnostic ignored "-Wpedantic"
 #include <capstone/capstone.h>
+#include <libunwind.h>
 
 #include <libelf.h> // Required for EV_CURRENT and other libelf functions
 #include <fcntl.h>
@@ -147,8 +171,11 @@ extern short wrapper_objsnf_dlsym_done;
 
 #ifndef PRINT_STATE_INFO
 #define PRINT_STATE_INFO 0
-#define ALLOC_DBG 0
 #define ENABLE_DLINFO 1 // Big runtime overhead
+#endif
+
+#ifndef ALLOC_DBG
+#define ALLOC_DBG 1
 #endif
 
 #ifndef ENABLE_TRACING
@@ -157,7 +184,7 @@ extern short wrapper_objsnf_dlsym_done;
 
 #ifndef ENABLE_LOGGING
 // If logging is enabled, it will create a file for each object that is accessed
-#define ENABLE_LOGGING 1
+#define ENABLE_LOGGING 0
 #define PRINT_LOGGING_INFO 0
 #endif
 
@@ -171,8 +198,8 @@ extern short wrapper_objsnf_dlsym_done;
 #define MAX_INTERRUPT_CONTEXTS 64
 #endif
 
-#define MAX_OBJ_NAME_LEN 48
-#define MAX_TYPE_NAME_LEN 40 
+#define MAX_OBJ_NAME_LEN 100
+#define MAX_TYPE_NAME_LEN 100 
 
 #define USE_SHELL_COLORING 1
 
@@ -214,6 +241,12 @@ extern short wrapper_objsnf_dlsym_done;
 // Fix double locking of objects when registerred
 
 
+/* Prototypes of a bunch of internal allocators for the capstone library since malloc is causing so much trouble */
+extern void wrapper_objsnf_zalloc_free_internal(void* ptr);
+extern void* wrapper_objsnf_zalloc_internal(size_t size);
+extern void* wrapper_objsnf_zalloc_realloc_internal(void* old_ptr, size_t size);
+extern void* wrapper_objsnf_zalloc_calloc_internal(size_t nmemb, size_t size);
+
 // Assembly macro for writing a string literal to stdout using syscall
 #define WRITE_STR_LIT(const_str)                                              \
 asm volatile (                                                      \
@@ -244,7 +277,7 @@ asm volatile (                                                      \
 /* 
  * Struct to keep track of traced objects
  * Note:
- *  - This is also used in wrap-preload
+ *  - This is also used in Wrapper
  *  - The size of the struct must be a multiple of 64
  */
 typedef struct objsnf_traced_objects_t {
@@ -255,8 +288,11 @@ typedef struct objsnf_traced_objects_t {
     unsigned long  unaligned_size;
     char    name[MAX_OBJ_NAME_LEN];
     char    type[MAX_TYPE_NAME_LEN];
+    char**  call_stack; // Call stack at the time of registration
+    short   call_stack_size; // Number of frames in the call stack at the time of registration
     short   snap_count; // Count of how many times this object was accessed
     bool    is_a_reference_pointer; // If this object is a reference pointer to the object of interest
+    bool    has_been_freed;
 } objsnf_traced_objects_s;
 
 
@@ -276,6 +312,20 @@ enum objsnf_node_state_s {
     IN_USE_NODE,
 };
 
+// DO NOT CHANGE THE ORDER OF THE ENUM VALUES BELOW
+// This enum tracks what state the whole tool is in e.g. are the wrapper done? Is the tracer active?
+// This is used to prevent the wrapper from intercepting allocs before the tracer is ready
+enum ichnaea_state_s {
+    WRAPPER_INIT_NOT_STARTED,  // Initial state, before any the LD preloaded library has even been initialized
+    WRAPPER_INIT_STARTED,      // The LD preloaded library has started initialization but hasn't finished yet (dlsyms take time)
+    WRAPPER_ALLOC_INIT_DONE,   // The LD preloaded library has finished initialization of the alloc wrappers (dlsyms are done)
+    WRAPPER_WAITING_ON_TRACER, // The LD preloaded library is waiting for the tracer to be initialized (the tracer does lazy init)
+    WRAPPER_ACTIVE,            // The LD preloaded library has finished initialization and has been activated by the tracer to interrupt allocs and syscalls
+    EXITING                    // The tool is exiting, either due to normal exit or due to a signal
+};
+
+extern enum ichnaea_state_s         ichnaea_state;                                // Current state of the wrapper
+
 struct interrupt_contexts_t {
     pid_t                               thread_id;          // Identify the ctx by thread id
     void*                               orig_addr;          // Starting addr of the instruction that was modified to an INT3
@@ -283,6 +333,7 @@ struct interrupt_contexts_t {
     objsnf_traced_objects_s*            object;             // Figure out which object is being accessed
     bool                                is_obj_traced;      // False if the locked obj isn't traced
     enum objsnf_node_state_s            node_state;         // Hackish way of makin a bad linked list
+    bool                                is_read;            // True if the fault was caused by a read
     char                                padding[24];        // Padding to make the struct size a multiple of 4096
 };
 
@@ -291,7 +342,7 @@ typedef struct interrupt_contexts_t interrupt_contexts_s;
 // Common functions in the tracer and wrapper
 objsnf_traced_objects_s*            objsnf_address_within_traced_objects_pg (void * addr_in_question,objsnf_traced_objects_s *traced_objects);
 int                                 objsnf_register_object                  (void *addr, size_t size, char *name, char *type);
-int                                 objsnf_log_event                        (objsnf_traced_objects_s * obj, bool syscall_dump);
+int                                 objsnf_log_event                        (objsnf_traced_objects_s * obj, bool syscall_dump, bool is_read, ucontext_t * uctx);
 
 
 struct snap_metadata_s {
@@ -300,6 +351,7 @@ struct snap_metadata_s {
     short call_stack_size;                                // Size of the call stack
     pid_t pid;                                            // Process ID
     pid_t tid;                                            // Thread ID
+    bool is_read;                                         // Flag to indicate if this is a read snapshot
     bool is_syscall_dump;                                 // Flag to indicate if this is a syscall dump
     void* snap_buffer;                                    // Pointer to the snapshot buffer
 };
@@ -309,6 +361,16 @@ struct snap_metadata_s {
 */
 typedef struct snap_metadata_s snap_metadata_t;
 
+// Disables smart malloc locking temporarily
+extern __thread int ichnaea_smart_alloc_lock;
+#if PRINT_STATE_INFO
+
+#define DISABLE_SMART_ALLOC()   ichnaea_smart_alloc_lock = 1;WRITE_STR_LIT(TRACER_PRMPT "Smart allocation disabled by tracer @" AT_LINE "\n");
+#define ENABLE_SMART_ALLOC() ichnaea_smart_alloc_lock = 0;WRITE_STR_LIT(TRACER_PRMPT "Smart allocation enabled by tracer @" AT_LINE "\n");
+#else
+#define DISABLE_SMART_ALLOC()   ichnaea_smart_alloc_lock = 1;
+#define ENABLE_SMART_ALLOC() ichnaea_smart_alloc_lock = 0;
+#endif
 
 #ifndef _WRAP_PRELOAD_H
 /* Function prototypes */
@@ -326,7 +388,8 @@ int                                 objsnf_add_interrupt_context            (
                                         unsigned char orig_instruction,
                                         objsnf_traced_objects_s *object,
                                         interrupt_contexts_s *interrupt_ctx,
-                                        bool is_obj_traced /* Usually true, unless we hit a address that incidentally falls on the same page as a traced object */
+                                        bool is_obj_traced, /* Usually true, unless we hit a address that incidentally falls on the same page as a traced object */
+                                        bool is_read
                                     );
 int                                 objsnf_remove_interrupt_context         (unsigned short idx, interrupt_contexts_s *interrupt_ctx);
 int                                 objsnf_thread_has_interrupt_contexts    (pid_t thread_id , interrupt_contexts_s *interrupt_ctx);
@@ -338,6 +401,8 @@ static inline uint64_t              narrow_to_size                          (uin
 static int                          get_src_scalar                          (const cs_insn *insn, const ucontext_t *uc, uint64_t *out, unsigned *width);
 static uint64_t                     apply_rmw                               (uint64_t oldv, uint64_t src, unsigned width, unsigned insn_id);
 store_value_t                       compute_store_value                     (const uint8_t *ip, const void *ea, const ucontext_t *uc);
+void                                ichnaea_boxed_print                     (const char *msg);
+void*                               ichnaea_memcpy                          (void *dst, const void *src, size_t n);
 
 #endif // _WRAP_PRELOAD_H
 
@@ -353,6 +418,11 @@ typedef struct objsnf_safe_globals_s {
     int                        session_id; // Session ID for the tracer
     interrupt_contexts_s       interrupt_contexts [MAX_INTERRUPT_CONTEXTS];
     objsnf_traced_objects_s    traced_objects  [MAX_OBJ_COUNT];
+
+    #if OBJSNF_ENABLE_PKEY_BASED_LOCK
+    int                        pkey; // Protection key for pkey based locking
+    #endif
+
     #if OBJSNF_ENABLE_SNAPSHOT_BATCHING
     snap_metadata_t            snapshot_metadata_arr[MAX_OBJ_COUNT+1][OBJSNF_MAX_SNAPSHOTS_PER_OBJECT+1]; // Array to hold the heads of the snapshot metadata list for each object
     #endif

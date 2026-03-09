@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <string.h>
 #include <stdio.h>
+#pragma GCC diagnostic ignored "-Wpedantic"
 #include <capstone/capstone.h>
 
 #include "tracer.h"
@@ -21,6 +22,9 @@ extern int          (*wrapper_objsnf_posix_memalign)      (void **, size_t, size
 extern void*        (*wrapper_objsnf_real_valloc)         (size_t)                  ;
 extern void         (*wrapper_objsnf_real_free)           (void*)                   ;
 
+// Some function API from tracer.h that for some reason (i need to figure this out) are not visible in wrap-allocs.c
+void*                               ichnaea_memcpy                          (void *dst, const void *src, size_t n);
+
 
 extern void         alloc_init(void); // Forward declaration for the alloc_init function
 
@@ -34,7 +38,7 @@ extern ssize_t      (*wrapper_objsnf_real_pread)          (int, void *, size_t, 
 extern ssize_t      (*wrapper_objsnf_real_pread64)        (int, void *, size_t, off64_t) ;
 extern size_t       (*wrapper_objsnf_real_fread)          (void *, size_t, size_t, FILE *) ;
 extern size_t       (*wrapper_objsnf_real_fread_unlocked) (void *, size_t, size_t, FILE *) ;
-
+extern ssize_t      (*wrapper_objsnf_real_write)          (int fildes, const void* buf, size_t nbyte);
 
 // Local Prototypes
 extern void  wrapper_objsnf_unlock_all_objs_or_one  (void * single_address);
@@ -52,5 +56,5 @@ typedef struct zalloc_obj {
 
 
 extern short                        wrapper_objsnf_dlsym_done; 
-extern short                          wrapper_objsnf_alloc_init_pending;
+extern short                        wrapper_objsnf_alloc_init_pending;
 extern objsnf_safe_globals_t        objsnf_gvars;                              // Global variables from the tracer.c

@@ -5,6 +5,12 @@
             "int int:"
         ]
     },
+    "char": {
+        "fmt": "c",
+        "struct_layout": [
+            "char char:"
+        ]
+    },
     "char*": {
         "fmt": "s",
         "struct_layout": [

@@ -106,11 +106,12 @@ def check_addr(addr, mapfile):
         return f"Error: {e}"
     return "Unknown"
 
-def decode_snapshot(snapshot_file, type , map_csv , snap_id = None ,):
+# This function decodes a binary snapshot file based on the provided type and layout
+def decode_snapshot(snapshot_file, type , map_csv , snap_id = None):
     snapshot_file = os.path.abspath(snapshot_file)
 
     is_v2 = True if snapshot_file.endswith(".bin") else False
-
+    
     if type in layouts:
         fmt = layouts[type]["fmt"]
         struct_layout = layouts[type]["struct_layout"]
@@ -157,7 +158,7 @@ def decode_snapshot(snapshot_file, type , map_csv , snap_id = None ,):
     
     return output
 
-def discover_objects(directory, session_id):
+def discover_objects(directory, session_id, only_decode_pointers = False):
     global discovered_objects
     if session_id not in discovered_objects:
         discovered_objects[session_id] = {}
@@ -244,6 +245,7 @@ def discover_objects(directory, session_id):
                 json_data = {}
                 # Read the json file to get the type and size
                 with open(object_path, 'r') as f:
+                    # print(f"Processing JSON file: {object_path}")
                     json_data = json.load(f)
                 
                 # Remove the "obj" prefix and ".json" suffix
@@ -255,6 +257,8 @@ def discover_objects(directory, session_id):
                         "type": json_data['object']["type"],
                         "size": json_data['object']["size"],
                         "total_snapshots": json_data['object']["snap_count"],
+                        "registration_call_stack": json_data['object']["registration_call_stack"] if "registration_call_stack" in json_data['object'] else [],
+                        "registration_cs_size": json_data['object']["registration_cs_size"] if "registration_cs_size" in json_data['object'] else 0,
                         "snapshots": {}
                     }
                 }
@@ -262,34 +266,78 @@ def discover_objects(directory, session_id):
                 discovered_objects[session_id][object_name] = k[object_name]
                 _seen_hashes = set()  # To keep track of already seen snapshot hashes
                 for snap_id in range( 0, json_data['object']["snap_count"]):
-                    decoded_data = decode_snapshot(
-                        snapshot_file,
-                        json_data['object']["type"],
-                        discovered_session_files[session_id],
-                        snap_id
-                    )
+                    
+                    _hash = None
+                    decoded_data = None
 
-                    # Hash the edecoded data
-                    _hash = hash( json.dumps(decoded_data , sort_keys=True) )
-                    _seen_hashes.add(_hash)
+                    # If the user does not want to decode the snap data then skip this step
+                    if not only_decode_pointers:
+                        decoded_data = decode_snapshot(
+                            snapshot_file,
+                            json_data['object']["type"],
+                            discovered_session_files[session_id],
+                            snap_id
+                        )
 
-                    if decoded_data is None:
-                        print(f"Failed to decode snapshot {snap_id} for object {object_name} in session {session_id}")
-                        continue
+                        # Hash the edecoded data
+                        _hash = int(hash( json.dumps(decoded_data , sort_keys=True) ))
+                        _seen_hashes.add(_hash)
 
-                    if json_data[f'snapshot_{snap_id}']["is_syscall_dump"] == True:
-                        if _hash in _seen_hashes:
-                            print(f"Skipping snapshot {snap_id} for object {object_name} in session {session_id} due to duplicate hash.")
+                        if decoded_data is None:
+                            print(f"Failed to decode snapshot {snap_id} for object {object_name} in session {session_id}")
                             continue
+
+                        if json_data[f'snapshot_{snap_id}']["is_syscall_dump"] == True:
+                            if _hash in _seen_hashes:
+                                print(f"Skipping snapshot {snap_id} for object {object_name} in session {session_id} due to duplicate hash.")
+                                continue
                     # Add the snapshot data to the discovered_objects dictionary
                     _tmp_cs_stk = []
+                    print(f"Resolving call stack for snapshot {snap_id} of object {object_name} in session {session_id}...")
                     for i in json_data[f'snapshot_{snap_id}']["call_stack"]:
                         fn__ = check_addr(i, discovered_session_files[session_id])
+                        print(f"Resolved {i} to {fn__}")
                         if fn__ != "Unknown":
                             _tmp_cs_stk.append( [i, {"resolved_fn_name" : fn__ }] )
+                        else:
+                            _tmp_cs_stk.append( [i, {"resolved_fn_name" : "Null" }] )
+                    
+                    snap_file_names = []
+
+                    # Split the monolithic snapshot file into multiple files incase the user needs to work with them individually
+                    # Create a sperate diretcory name raw_snaps if it doesn't exist and add a directory for the session ID
+                    raw_snaps_dir = f"raw_snaps_{session_id}"
+                    if not os.path.exists(raw_snaps_dir):
+                        os.makedirs(raw_snaps_dir)
+                    
+                    raw_snaps_dir = os.path.join(raw_snaps_dir, object_name)
+                    if not os.path.exists(raw_snaps_dir):
+                        os.makedirs(raw_snaps_dir)
+                    # Copy the snapshot file to the new directory with a new name
+                    for snap_number in range(0, json_data['object']["snap_count"]):
+                        new_snap_file = os.path.join(raw_snaps_dir, f"{object_name}_[snap:{snap_number}]_[size:{json_data['object']['size']}].bin")
+                        snap_file_names.append(new_snap_file)
+                        with open(new_snap_file, "wb") as out_f, open(snapshot_file, "rb") as in_f:
+                            size_of_one_snap = snapshot_file.split("size:")[1].split("]")[0]
+                            in_f.seek(snap_number * int(size_of_one_snap))
+                            snap_data = in_f.read(int(size_of_one_snap))
+                            out_f.write(snap_data)
+                    
+                    # In the same directory create a file readme with info about what these files are
+                    readme_file = os.path.join(raw_snaps_dir, "README.txt")
+                    if not os.path.exists(readme_file):
+                        with open(readme_file, "w") as f:
+                            f.write("This directory contains raw snapshot files for a traced object.\n")
+                            f.write("Each file is named in the format: <object_name>_[snap:<snap_number>]_[size:<object_size>].bin\n")
+                            f.write("These files were extracted from a monolithic snapshot file for easier access and analysis.\n")
+                            f.write("Use the appropriate layout to decode these binary files.\n")
+                            f.write("Note: These files contain only the raw binary data of the snapshots without any additional metadata.\n")
+                     
 
                     k[object_name]["snapshots"][str(snap_id)] = {
-                        "data": decoded_data,
+                        "was_data_decoded": False if only_decode_pointers else True,
+                        "data": {} if only_decode_pointers else decoded_data,
+                        "binary_snapshot_file(s)": snap_file_names,
                         "callstack": _tmp_cs_stk,
                         "pid": json_data[f'snapshot_{snap_id}']["pid"],
                         "tid": json_data[f'snapshot_{snap_id}']["tid"],
@@ -333,7 +381,6 @@ def main():
     global layouts
 
     tmp_dir = ""
-
     # Check for command line arguments
     if len(sys.argv) < 2:
         print("Usage: python decode2.py <trace_directory> <optional: dump_all_sessions(-d)>")
@@ -344,6 +391,7 @@ def main():
         trace_directory = sys.argv[1]
     
     dump_all_sessions = False
+    only_decode_pointers = False
     if len(sys.argv) >= 3 and (sys.argv[2].lower() == "-dump_all_sessions" or sys.argv[2].lower() == "-d"):
         dump_all_sessions = True
 
@@ -357,18 +405,27 @@ def main():
         print(f"Error: {trace_directory} is empty.")
         sys.exit(1)
     
-    # Check if the layouts file exists
-    if os.path.exists("layouts.json"): # Searching for layouts.json in the current directory
-        with open("layouts.json", "r") as f:
-            layouts = json.load(f)
-    else:
-        # Try looking in the trace directory
-        if os.path.exists(os.path.join(trace_directory, "layouts.json")):
-            with open(os.path.join(trace_directory, "layouts.json"), "r") as f:
+    # Check if the user only wants to decode pointers and split the snaps into multiple files
+    for word in sys.argv:
+        if word.lower() == "-pointers_only" or word.lower() == "-p":
+            # In this case we don't need the layouts.json file
+            print("Decoding only pointers and splitting snaps into multiple files...")
+            only_decode_pointers = True
+
+    if not only_decode_pointers:
+        # Check if the layouts file exists if we're decoding the snap data as well
+        # but if we're only decoding pointers then we don't need the layouts file as we're only decoding pointers not decoding the snaps
+        if os.path.exists("layouts.json"): # Searching for layouts.json in the current directory
+            with open("layouts.json", "r") as f:
                 layouts = json.load(f)
         else:
-            print("Error: layouts.json file not found in the current directory or trace directory.")
-            sys.exit(1)
+            # Try looking in the trace directory
+            if os.path.exists(os.path.join(trace_directory, "layouts.json")):
+                with open(os.path.join(trace_directory, "layouts.json"), "r") as f:
+                    layouts = json.load(f)
+            else:
+                print("Error: layouts.json file not found in the current directory or trace directory.")
+                sys.exit(1)
     
     # Discover session files
     discover_sessions(trace_directory)
@@ -380,7 +437,7 @@ def main():
     if dump_all_sessions:
         print("Dumping all discovered sessions:")
         for session_id in discovered_session_files.keys():
-            discover_objects(trace_directory, session_id)
+            discover_objects(trace_directory, session_id , only_decode_pointers)
         print("All sessions dumped successfully.")
         return
 
@@ -390,7 +447,7 @@ def main():
     print(f"You chose session ID: {chosen_session}")
 
     # Discover objects in the chosen session
-    discover_objects(trace_directory, chosen_session)
+    discover_objects(trace_directory, chosen_session , only_decode_pointers)
     print(f"Discovered objects for session {chosen_session}:")
 
 
