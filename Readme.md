@@ -9,9 +9,10 @@ Ichnaea is a runtime memory object tracing tool that works without instrumentati
 - Uses MPKs for access control
 
 ## Requirements
+- x86_64 architecture with MPK support (most modern Intel CPUs, build system will check this automatically)
 - Linux (Mostly tested on Debian based systems)
 - GCC
-- The application **can** be compiled with `-rdynamic` flag (this helps to get symbol names during runtime)
+- [Optional] The application **can** be compiled with `-rdynamic` flag (this helps to get symbol names during runtime)
 - The application does not use custom signal handlers for SIGSEGV and SIGTRAP
 - `libunwind` library should be installed (sudo apt install libunwind-dev)
 - `libcapstone` will be built locally from source (no need to install system wide)
