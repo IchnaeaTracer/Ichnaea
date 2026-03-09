@@ -55,9 +55,10 @@ $make
 A test program (see below) can be run with two simple commands:
 
 ```bash
-$make run_example
+$ make install_deps
+$ make run_example
 ```
-But if you wanna create your own test program to see how the tracing works, you can create a C file with the following content:
+But if you want to create your own test program to see how the tracing works, you can create a C file with the following content:
 ```c
 #include <stdio.h>
 #include "../tracer.h" // INCLUDE THIS HEADER FILE
@@ -112,6 +113,7 @@ int main() {
 once you've created the file (say its named `example_trace.c`). Then, you can compile and run it by:
 
 ```bash
+$ make install_deps
 $ make # Builds the wrapper library libtracer.so in the current directory
 $ gcc example_trace.c -o example_trace -ldl -lunwind -rdynamic // the -rdynamic flag is optional
 $ LD_PRELOAD=./libtracer.so ./example_trace
