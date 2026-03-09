@@ -59,18 +59,13 @@ $(library_name): $(tracer_src) $(wrapper_src) build_libcapstone
 	@echo " "
 	$(CC) -shared -ggdb  -DOBJSNF_ENABLE_PKEY_BASED_LOCK=$(EN_PKU) -fPIC $(CFLAGS) -o $@ $(tracer_src) $(wrapper_src) -ldl -lelf -lcapstone -lunwind -lunwind-x86_64
 
-run_example: example $(library_name)
+run_example: example $(library_name) $(install_deps)
 	@echo $(BOLD)"\n\n\n-------------------------------"
 	@echo $(BLUE)"Running tests..."$(NC)
 	@echo $(BOLD)"-------------------------------\n"$(NC)
 	LD_PRELOAD=./$(library_name) ./example
 	@echo $(BOLD)"\n-------------------------------"$(NC)
 	@echo $(GREEN)"Tests completed."$(NC)
-
-run_example_simple: example $(library_name)
-	@echo $(BLUE)"Running simple example tests..."$(NC)
-	LD_PRELOAD=./$(library_name) ./example_simple
-	@echo $(GREEN)"Simple example Tests completed."$(NC)
 
 install_deps:
 	@$(SUDO) apt install -y libunwind-dev
