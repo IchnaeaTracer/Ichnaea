@@ -45,7 +45,7 @@ $sudo apt install make gcc git cmake
 # Clone the source code
 
 $git clone <this repo>
-$cd object_sniffer
+$cd Ichnaea
 $make install_deps  # Install dependencies
 $make
 ```
