@@ -254,7 +254,7 @@ void wrapper_objsnf_lock_all_objs_or_none(void * single_address) {
               WRITE_STR_LIT( RED "mprotect@" RESET AT_LINE);
               return;
           }
-          objsnf_log_event(&objsnf_gvars.traced_objects[i], true ,False, NULL);
+          objsnf_log_event(&objsnf_gvars.traced_objects[i], true ,false, NULL);
       }
   }
   return;
